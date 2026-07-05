@@ -41,6 +41,9 @@ export const connectToSocket = (server) => {
                 });
             }
         });
+        socket.on("signal", (toId, message) => {
+            io.to(toId).emit("signal", socket.id, message);
+        });
 
         socket.on("chat-message", (data, sender) => {
             // Find room for the current user
