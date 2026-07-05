@@ -32,7 +32,7 @@ export default function VideoMeetComponent() {
     let [video, setVideo] = useState(true);
     let [audio, setAudio] = useState(true);
     let [screen, setScreen] = useState();
-    let [showModal, setModal] = useState(false); // Changed default to false for chat
+    let [showModal, setModal] = useState(false);
     let [screenAvailable, setScreenAvailable] = useState();
     let [messages, setMessages] = useState([]);
     let [message, setMessage] = useState("");
@@ -180,13 +180,54 @@ export default function VideoMeetComponent() {
         });
     };
 
+    // RESTORED FIX: WebRTC logic for late joiners
     let gotMessageFromServer = (fromId, message) => {
         var signal = JSON.parse(message);
         if (fromId !== socketIdRef.current) {
+            
             if (!connections[fromId]) {
                 connections[fromId] = new RTCPeerConnection(peerConfigConnections);
-                // setup identical to above if late joining
+
+                connections[fromId].onicecandidate = function (event) {
+                    if (event.candidate != null) {
+                        socketRef.current.emit('signal', fromId, JSON.stringify({ 'ice': event.candidate }));
+                    }
+                };
+
+                connections[fromId].ontrack = (event) => {
+                    let videoExists = videoRef.current.find(video => video.socketId === fromId);
+
+                    if (videoExists) {
+                        setVideos(videos => {
+                            const updatedVideos = videos.map(video =>
+                                video.socketId === fromId ? { ...video, stream: event.streams[0] } : video
+                            );
+                            videoRef.current = updatedVideos;
+                            return updatedVideos;
+                        });
+                    } else {
+                        let newVideo = { socketId: fromId, stream: event.streams[0] };
+                        setVideos(videos => {
+                            const updatedVideos = [...videos, newVideo];
+                            videoRef.current = updatedVideos;
+                            return updatedVideos;
+                        });
+                    }
+                };
+
+                if (window.localStream) {
+                    window.localStream.getTracks().forEach(track => {
+                        connections[fromId].addTrack(track, window.localStream);
+                    });
+                } else {
+                    let blackSilence = (...args) => new MediaStream([black(...args), silence()]);
+                    window.localStream = blackSilence();
+                    window.localStream.getTracks().forEach(track => {
+                        connections[fromId].addTrack(track, window.localStream);
+                    });
+                }
             }
+
             if (signal.sdp) {
                 connections[fromId].setRemoteDescription(new RTCSessionDescription(signal.sdp)).then(() => {
                     if (signal.sdp.type === 'offer') {
@@ -198,6 +239,7 @@ export default function VideoMeetComponent() {
                     }
                 }).catch(e => console.log(e));
             }
+
             if (signal.ice) {
                 connections[fromId].addIceCandidate(new RTCIceCandidate(signal.ice)).catch(e => console.log(e));
             }
